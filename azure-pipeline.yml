@@ -1,0 +1,60 @@
+jobs:
+  - job: Validate
+    steps:
+      - script: echo "Validate"
+
+  - job: Build
+    steps:
+    - task: DotNetCoreCLI@2
+      displayName: Test policies
+      inputs:
+        command: test
+        projects: PolicyDevOps.sln
+        arguments: -c Release -r linux-x64
+
+    - script: |
+        echo "Restoring .NET tools..."
+        dotnet tool restore
+
+        echo "Compiling policies to a common directory..."
+        dotnet azure-apim-policy-compiler --s PolicyDevOps.Apis.Policies --o $(Build.ArtifactStagingDirectory)/raw
+        echo "Policy compilation completed. Output stored in $(Build.ArtifactStagingDirectory)/raw"
+
+        # Loop over environments and process policies
+        for env in dev test acc prod; do
+          echo "Processing policies for environment: $env"
+
+          # Create environment-specific directory
+          mkdir -p $(Build.ArtifactStagingDirectory)/$env
+          echo "Created directory: $(Build.ArtifactStagingDirectory)/$env"
+
+          # Copy policies to environment-specific directory
+          cp $(Build.ArtifactStagingDirectory)/raw/* $(Build.ArtifactStagingDirectory)/$env
+          echo "Copied policies to $(Build.ArtifactStagingDirectory)/$env"
+
+          # Perform find and replace for the environment
+          for file in $(Build.ArtifactStagingDirectory)/$env/*.xml; do
+            echo "Updating environment placeholders in file: $file"
+            sed -i "s/{environment}/$env/g" "$file"
+            echo "Updated $file for environment: $env"
+          done
+        done
+
+        echo "Policy processing completed for all environments."
+
+      name: compileAndDistributePolicies
+      displayName: Compile and distribute policies for all environments
+
+    - task: CopyFiles@2
+      displayName: Copy files to Artifact Staging Directory
+      inputs:
+        SourceFolder: '$(Build.ArtifactStagingDirectory)'
+        Contents: '**/*'
+        TargetFolder: '$(Build.ArtifactStagingDirectory)'
+
+    - task: PublishPipelineArtifact@1
+      displayName: Publish artifact
+      inputs:
+        targetPath: '$(Build.ArtifactStagingDirectory)'
+        artifact: 'Policies'
+        publishLocation: 'pipeline'
